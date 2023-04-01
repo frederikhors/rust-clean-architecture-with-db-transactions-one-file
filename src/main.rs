@@ -16,43 +16,20 @@ mod entities {
 
 mod repositories {
     pub mod postgres {
+        use crate::services::commands::{CommandsRepoTrait, TransactionTrait};
         use std::sync::Arc;
 
         pub mod player {
             pub mod commands {
                 use crate::entities::Player;
-                use crate::services::commands::player::create::PlayerCreateLambdaArgs;
-                use crate::services::commands::Lambda;
+                use crate::repositories::postgres::Transaction;
+                use crate::services::commands::RepoPlayerTrait;
                 use crate::PlayerInput;
 
                 #[async_trait::async_trait]
-                impl crate::services::commands::RepoPlayer for crate::repositories::postgres::Repo {
-                    async fn player_create(
-                        &self,
-                        input: &PlayerInput,
-                        lambda: &Lambda<PlayerCreateLambdaArgs, Player>,
-                    ) -> Result<Player, String> {
+                impl RepoPlayerTrait for Transaction {
+                    async fn player_create(&self, input: &PlayerInput) -> Result<Player, String> {
                         println!("input: {:?} - player_create postgres repo", input);
-
-                        // create a transaction here because I can use it for other repository methods calls
-                        let tx = self.pool.begin().await.unwrap();
-
-                        // wait for lambda result
-                        let player = lambda(PlayerCreateLambdaArgs {}).await?;
-
-                        // insert player here with appropriate code for this repository
-
-                        tx.commit().await.unwrap();
-
-                        Ok(player)
-                    }
-
-                    async fn player_create_with_tx(
-                        &self,
-                        tx: Box<dyn crate::services::commands::Transaction>,
-                        input: &PlayerInput,
-                    ) -> Result<Player, String> {
-                        println!("input: {:?} - player_create_with_tx postgres repo", input);
 
                         // insert player here with appropriate code for this repository using tx
 
@@ -72,7 +49,7 @@ mod repositories {
                 use crate::entities::Player;
 
                 #[async_trait::async_trait]
-                impl crate::services::queries::RepoPlayer for crate::repositories::postgres::Repo {
+                impl crate::services::queries::RepoPlayerTrait for crate::repositories::postgres::Repo {
                     async fn player_by_id(&self, id: &str) -> Result<Option<Player>, String> {
                         println!("id: {} - player_by_id postgres repo", id);
 
@@ -115,24 +92,9 @@ mod repositories {
             }
         }
 
-        struct Transaction {
-            pub tx: sqlx::Transaction<'static, sqlx::Postgres>,
-        }
-
         #[async_trait::async_trait]
-        impl crate::services::commands::Transaction for Transaction {
-            async fn finish(self) {
-                println!("finish transaction postgres repo");
-
-                self.tx.commit().await.unwrap();
-            }
-        }
-
-        #[async_trait::async_trait]
-        impl crate::services::commands::DB for crate::repositories::postgres::Repo {
-            async fn start_transaction(
-                &self,
-            ) -> Result<Box<dyn crate::services::commands::Transaction>, String> {
+        impl CommandsRepoTrait for crate::repositories::postgres::Repo {
+            async fn start_transaction(&self) -> Result<Box<dyn TransactionTrait>, String> {
                 println!("start_transaction postgres repo");
 
                 let tx = self.pool.begin().await.unwrap();
@@ -140,47 +102,36 @@ mod repositories {
                 Ok(Box::new(Transaction { tx }))
             }
         }
+
+        struct Transaction {
+            pub tx: sqlx::Transaction<'static, sqlx::Postgres>,
+        }
+
+        #[async_trait::async_trait]
+        impl TransactionTrait for Transaction {
+            async fn finish(self) {
+                println!("finish transaction postgres repo");
+
+                self.tx.commit().await.unwrap();
+            }
+        }
     }
 
     pub mod inmemory {
+        use crate::services::commands::{CommandsRepoTrait, TransactionTrait};
         use std::{collections::BTreeMap, sync::Arc};
 
         pub mod player {
             pub mod commands {
                 use crate::entities::Player;
-                use crate::services::commands::player::create::PlayerCreateLambdaArgs;
-                use crate::services::commands::Lambda;
+                use crate::repositories::inmemory::Transaction;
+                use crate::services::commands::RepoPlayerTrait;
                 use crate::PlayerInput;
 
                 #[async_trait::async_trait]
-                impl crate::services::commands::RepoPlayer for crate::repositories::inmemory::Repo {
-                    async fn player_create(
-                        &self,
-                        input: &PlayerInput,
-                        lambda: &Lambda<PlayerCreateLambdaArgs, Player>,
-                    ) -> Result<Player, String> {
-                        println!("input: {:?} - player_create in_memory repo", input);
-
-                        // create a transaction here because I can use it for other repository methods calls
-                        // let mut tx = self.pool.begin().await?;
-
-                        // wait for lambda result
-                        let player = lambda(PlayerCreateLambdaArgs {}).await?;
-
-                        // insert player here with appropriate code for this repository
-
-                        // commit DB transaction here
-                        // tx.commit().await?;
-
-                        Ok(player)
-                    }
-
-                    async fn player_create_with_tx(
-                        &self,
-                        tx: Box<dyn crate::services::commands::Transaction>,
-                        input: &PlayerInput,
-                    ) -> Result<Player, String> {
-                        println!("input: {:?} - player_create_with_tx inmemory repo", input);
+                impl RepoPlayerTrait for Transaction {
+                    async fn player_create(&self, input: &PlayerInput) -> Result<Player, String> {
+                        println!("input: {:?} - player_create inmemory repo", input);
 
                         // insert player here with appropriate code for this repository using tx
 
@@ -198,10 +149,10 @@ mod repositories {
 
             pub mod queries {
                 pub mod player {
-                    use crate::entities::Player;
+                    use crate::{entities::Player, services::queries::RepoPlayerTrait};
 
                     #[async_trait::async_trait]
-                    impl crate::services::queries::RepoPlayer for crate::repositories::inmemory::Repo {
+                    impl RepoPlayerTrait for crate::repositories::inmemory::Repo {
                         async fn player_by_id(&self, id: &str) -> Result<Option<Player>, String> {
                             println!("id: {} - player_by_id in_memory repo", id);
 
@@ -252,7 +203,7 @@ mod repositories {
         }
 
         #[async_trait::async_trait]
-        impl crate::services::commands::Transaction for Transaction {
+        impl TransactionTrait for Transaction {
             async fn finish(self) {
                 println!("finish transaction inmemory repo");
 
@@ -262,10 +213,8 @@ mod repositories {
         }
 
         #[async_trait::async_trait]
-        impl crate::services::commands::DB for crate::repositories::inmemory::Repo {
-            async fn start_transaction(
-                &self,
-            ) -> Result<Box<dyn crate::services::commands::Transaction>, String> {
+        impl CommandsRepoTrait for crate::repositories::inmemory::Repo {
+            async fn start_transaction(&self) -> Result<Box<dyn TransactionTrait>, String> {
                 println!("start_transaction inmemory repo");
 
                 let tx = "fake_transaction".to_string();
@@ -278,11 +227,8 @@ mod repositories {
 
 mod services {
     pub mod commands {
-        use self::player::create::PlayerCreateLambdaArgs;
         use crate::entities::Player;
         use crate::services::commands::player::PlayerInput;
-        use std::future::Future;
-        use std::pin::Pin;
 
         pub mod player {
             #[derive(Debug, Default)]
@@ -336,51 +282,38 @@ mod services {
                             return Err("this team doesn't have free space".to_string());
                         }
 
-                        let player = self
-                            .deps
-                            .commands_repo
-                            .player_create_with_tx(tx, input)
-                            .await?;
+                        // let player = self.deps.commands_repo.player_create(input).await?;
+                        let player = tx.player_create(input).await?;
 
                         Ok(player)
                     }
                 }
-
-                pub struct PlayerCreateLambdaArgs {}
             }
         }
 
-        pub trait CommandsRepoTrait: Send + Sync + DB + RepoPlayer {}
+        // pub trait CommandsRepoTrait: Send + Sync + DBTrait + RepoPlayerTrait {}
+        // pub trait CommandsRepoTrait: Send + Sync + DBTrait {}
+        #[async_trait::async_trait]
+        pub trait CommandsRepoTrait: Send + Sync {
+            async fn start_transaction(&self) -> Result<Box<dyn TransactionTrait>, String>;
+        }
 
-        impl<T: DB + RepoPlayer + DB> CommandsRepoTrait for T {}
+        // impl<T: DBTrait + RepoPlayerTrait> CommandsRepoTrait for T {}
+        // impl<T: DBTrait> CommandsRepoTrait for T {}
 
-        pub type Lambda<'a, ArgT, ResT> = dyn 'a
-            + Fn(ArgT) -> Pin<Box<dyn Future<Output = Result<ResT, String>> + Send + 'a>>
-            + Sync;
+        // #[async_trait::async_trait]
+        // pub trait DBTrait: Send + Sync {
+        //     async fn start_transaction(&self) -> Result<Box<dyn TransactionTrait>, String>;
+        // }
 
         #[async_trait::async_trait]
-        pub trait Transaction: Send + Sync {
+        pub trait TransactionTrait: RepoPlayerTrait {
             async fn finish(self);
         }
 
         #[async_trait::async_trait]
-        pub trait DB: Send + Sync {
-            async fn start_transaction(&self) -> Result<Box<dyn Transaction>, String>;
-        }
-
-        #[async_trait::async_trait]
-        pub trait RepoPlayer: Send + Sync {
-            async fn player_create<'a>(
-                &'a self,
-                input: &PlayerInput,
-                lambda: &Lambda<PlayerCreateLambdaArgs, Player>,
-            ) -> Result<Player, String>;
-
-            async fn player_create_with_tx<'a>(
-                &'a self,
-                tx: Box<dyn Transaction>,
-                input: &PlayerInput,
-            ) -> Result<Player, String>;
+        pub trait RepoPlayerTrait: Send + Sync {
+            async fn player_create<'a>(&'a self, input: &PlayerInput) -> Result<Player, String>;
         }
     }
 
@@ -433,12 +366,12 @@ mod services {
             }
         }
 
-        pub trait QueriesRepoTrait: Send + Sync + RepoPlayer + RepoTeam {}
+        pub trait QueriesRepoTrait: Send + Sync + RepoPlayerTrait + RepoTeam {}
 
-        impl<T: RepoPlayer + RepoTeam> QueriesRepoTrait for T {}
+        impl<T: RepoPlayerTrait + RepoTeam> QueriesRepoTrait for T {}
 
         #[async_trait::async_trait]
-        pub trait RepoPlayer: Send + Sync {
+        pub trait RepoPlayerTrait: Send + Sync {
             async fn player_by_id(&self, id: &str) -> Result<Option<Player>, String>;
         }
 
