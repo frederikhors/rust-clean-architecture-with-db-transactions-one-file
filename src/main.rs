@@ -18,16 +18,6 @@ mod repositories {
     pub mod postgres {
         use std::sync::Arc;
 
-        pub struct Repo {
-            pub pool: Arc<sqlx::PgPool>,
-        }
-
-        impl Repo {
-            pub fn new(pool: Arc<sqlx::PgPool>) -> Self {
-                Self { pool }
-            }
-        }
-
         pub mod player {
             pub mod commands {
                 use crate::entities::Player;
@@ -53,6 +43,25 @@ mod repositories {
                         // insert player here with appropriate code for this repository
 
                         tx.commit().await.unwrap();
+
+                        Ok(player)
+                    }
+
+                    async fn player_create_with_tx(
+                        &self,
+                        tx: Box<dyn crate::services::commands::Transaction>,
+                        input: &PlayerInput,
+                    ) -> Result<Player, String> {
+                        println!("input: {:?} - player_create_with_tx postgres repo", input);
+
+                        // insert player here with appropriate code for this repository using tx
+
+                        // how to get the tx here?
+                        // dbg!(tx);
+
+                        let player = Player {
+                            ..Default::default()
+                        };
 
                         Ok(player)
                     }
@@ -95,22 +104,46 @@ mod repositories {
                 }
             }
         }
+
+        pub struct Repo {
+            pub pool: Arc<sqlx::PgPool>,
+        }
+
+        impl Repo {
+            pub fn new(pool: Arc<sqlx::PgPool>) -> Self {
+                Self { pool }
+            }
+        }
+
+        struct Transaction {
+            pub tx: sqlx::Transaction<'static, sqlx::Postgres>,
+        }
+
+        #[async_trait::async_trait]
+        impl crate::services::commands::Transaction for Transaction {
+            async fn finish(self) {
+                println!("finish transaction postgres repo");
+
+                self.tx.commit().await.unwrap();
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl crate::services::commands::DB for crate::repositories::postgres::Repo {
+            async fn start_transaction(
+                &self,
+            ) -> Result<Box<dyn crate::services::commands::Transaction>, String> {
+                println!("start_transaction postgres repo");
+
+                let tx = self.pool.begin().await.unwrap();
+
+                Ok(Box::new(Transaction { tx }))
+            }
+        }
     }
 
     pub mod inmemory {
         use std::{collections::BTreeMap, sync::Arc};
-
-        pub struct Repo {
-            pub pool: Arc<BTreeMap<String, String>>,
-        }
-
-        impl Repo {
-            pub fn new() -> Self {
-                let pool = Arc::new(BTreeMap::new());
-
-                Self { pool }
-            }
-        }
 
         pub mod player {
             pub mod commands {
@@ -138,6 +171,25 @@ mod repositories {
 
                         // commit DB transaction here
                         // tx.commit().await?;
+
+                        Ok(player)
+                    }
+
+                    async fn player_create_with_tx(
+                        &self,
+                        tx: Box<dyn crate::services::commands::Transaction>,
+                        input: &PlayerInput,
+                    ) -> Result<Player, String> {
+                        println!("input: {:?} - player_create_with_tx inmemory repo", input);
+
+                        // insert player here with appropriate code for this repository using tx
+
+                        // how to get the tx here?
+                        // dbg!(tx);
+
+                        let player = Player {
+                            ..Default::default()
+                        };
 
                         Ok(player)
                     }
@@ -182,6 +234,45 @@ mod repositories {
                 }
             }
         }
+
+        pub struct Repo {
+            pub pool: Arc<BTreeMap<String, String>>,
+        }
+
+        impl Repo {
+            pub fn new() -> Self {
+                let pool = Arc::new(BTreeMap::new());
+
+                Self { pool }
+            }
+        }
+
+        struct Transaction {
+            pub tx: String,
+        }
+
+        #[async_trait::async_trait]
+        impl crate::services::commands::Transaction for Transaction {
+            async fn finish(self) {
+                println!("finish transaction inmemory repo");
+
+                // simulate a commit here()
+                dbg!(self.tx);
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl crate::services::commands::DB for crate::repositories::inmemory::Repo {
+            async fn start_transaction(
+                &self,
+            ) -> Result<Box<dyn crate::services::commands::Transaction>, String> {
+                println!("start_transaction inmemory repo");
+
+                let tx = "fake_transaction".to_string();
+
+                Ok(Box::new(Transaction { tx }))
+            }
+        }
     }
 }
 
@@ -215,25 +306,43 @@ mod services {
                     }
 
                     pub async fn execute(&self, input: &PlayerInput) -> Result<Player, String> {
-                        let res = self
+                        // let res = self
+                        //     .deps
+                        //     .commands_repo
+                        //     .player_create(input, &|_| {
+                        //         let input = input;
+
+                        //         Box::pin(async move {
+                        //             let obj = Player {
+                        //                 id: "new_id".to_string(),
+                        //                 name: input.name.to_owned(),
+                        //                 team_id: input.team_id.to_owned(),
+                        //             };
+
+                        //             Ok(obj)
+                        //         })
+                        //     })
+                        //     .await?;
+
+                        let tx = self.deps.commands_repo.start_transaction().await?;
+
+                        let team = self.deps.queries_repo.team_by_id(&input.team_id).await?;
+
+                        if team.is_none() {
+                            return Err("this team doesn't exist".to_string());
+                        }
+
+                        if team.unwrap().missing_players == 0 {
+                            return Err("this team doesn't have free space".to_string());
+                        }
+
+                        let player = self
                             .deps
                             .commands_repo
-                            .player_create(input, &|_| {
-                                let input = input;
-
-                                Box::pin(async move {
-                                    let obj = Player {
-                                        id: "new_id".to_string(),
-                                        name: input.name.to_owned(),
-                                        team_id: input.team_id.to_owned(),
-                                    };
-
-                                    Ok(obj)
-                                })
-                            })
+                            .player_create_with_tx(tx, input)
                             .await?;
 
-                        Ok(res)
+                        Ok(player)
                     }
                 }
 
@@ -241,13 +350,23 @@ mod services {
             }
         }
 
-        pub trait CommandsRepoTrait: Send + Sync + RepoPlayer {}
+        pub trait CommandsRepoTrait: Send + Sync + DB + RepoPlayer {}
 
-        impl<T: RepoPlayer> CommandsRepoTrait for T {}
+        impl<T: DB + RepoPlayer + DB> CommandsRepoTrait for T {}
 
         pub type Lambda<'a, ArgT, ResT> = dyn 'a
             + Fn(ArgT) -> Pin<Box<dyn Future<Output = Result<ResT, String>> + Send + 'a>>
             + Sync;
+
+        #[async_trait::async_trait]
+        pub trait Transaction: Send + Sync {
+            async fn finish(self);
+        }
+
+        #[async_trait::async_trait]
+        pub trait DB: Send + Sync {
+            async fn start_transaction(&self) -> Result<Box<dyn Transaction>, String>;
+        }
 
         #[async_trait::async_trait]
         pub trait RepoPlayer: Send + Sync {
@@ -255,6 +374,12 @@ mod services {
                 &'a self,
                 input: &PlayerInput,
                 lambda: &Lambda<PlayerCreateLambdaArgs, Player>,
+            ) -> Result<Player, String>;
+
+            async fn player_create_with_tx<'a>(
+                &'a self,
+                tx: Box<dyn Transaction>,
+                input: &PlayerInput,
             ) -> Result<Player, String>;
         }
     }
