@@ -346,35 +346,30 @@ pub struct Deps {
 use crate::services::commands::player::PlayerInput;
 use std::sync::Arc;
 
-trait RepoSuperTrait:
-    services::commands::CommandsRepoTrait + services::queries::QueriesRepoTrait
-{
-}
-
-impl<T: services::commands::CommandsRepoTrait + services::queries::QueriesRepoTrait> RepoSuperTrait
-    for T
-{
-}
-
 #[tokio::main]
 async fn main() -> Result<(), String> {
     let use_postgres = false;
 
-    let db_repo: Arc<dyn RepoSuperTrait + 'static> = if use_postgres {
+    let deps = Arc::new(if use_postgres {
         let pg_pool = Arc::new(
             sqlx::PgPool::connect("postgres://postgres:postgres@localhost:5432/postgres")
                 .await
                 .unwrap(),
         );
 
-        Arc::new(repositories::postgres::Repo::new(pg_pool))
-    } else {
-        Arc::new(repositories::inmemory::Repo::new())
-    };
+        let repo = Arc::new(repositories::postgres::Repo::new(pg_pool));
 
-    let deps = Arc::new(Deps {
-        commands_repo: db_repo.clone(),
-        queries_repo: db_repo,
+        Deps {
+            commands_repo: repo.clone(),
+            queries_repo: repo,
+        }
+    } else {
+        let repo = Arc::new(repositories::inmemory::Repo::new());
+
+        Deps {
+            commands_repo: repo.clone(),
+            queries_repo: repo,
+        }
     });
 
     let app = App {
