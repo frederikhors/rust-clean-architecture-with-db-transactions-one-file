@@ -143,6 +143,25 @@ mod repositories {
                     }
                 }
             }
+
+            pub mod queries {
+                pub mod player {
+                    use crate::entities::Player;
+
+                    #[async_trait::async_trait]
+                    impl crate::services::queries::RepoPlayer for crate::repositories::inmemory::Repo {
+                        async fn player_by_id(&self, id: &str) -> Result<Option<Player>, String> {
+                            println!("id: {} - player_by_id in_memory repo", id);
+
+                            let obj = Player {
+                                ..Default::default()
+                            };
+
+                            Ok(Some(obj))
+                        }
+                    }
+                }
+            }
         }
 
         pub mod team {
@@ -327,15 +346,31 @@ pub struct Deps {
 use crate::services::commands::player::PlayerInput;
 use std::sync::Arc;
 
+trait RepoSuperTrait:
+    services::commands::CommandsRepoTrait + services::queries::QueriesRepoTrait
+{
+}
+
+impl<T: services::commands::CommandsRepoTrait + services::queries::QueriesRepoTrait> RepoSuperTrait
+    for T
+{
+}
+
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    let pg_pool = Arc::new(
-        sqlx::PgPool::connect("postgres://postgres:postgres@localhost:5432/postgres")
-            .await
-            .unwrap(),
-    );
+    let use_postgres = false;
 
-    let db_repo = Arc::new(repositories::postgres::Repo::new(pg_pool));
+    let db_repo: Arc<dyn RepoSuperTrait + 'static> = if use_postgres {
+        let pg_pool = Arc::new(
+            sqlx::PgPool::connect("postgres://postgres:postgres@localhost:5432/postgres")
+                .await
+                .unwrap(),
+        );
+
+        Arc::new(repositories::postgres::Repo::new(pg_pool))
+    } else {
+        Arc::new(repositories::inmemory::Repo::new())
+    };
 
     let deps = Arc::new(Deps {
         commands_repo: db_repo.clone(),
